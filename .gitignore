@@ -1,0 +1,26 @@
+# Terraform working dir and state (state can hold sensitive data)
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Local variable values; terraform.tfvars.example is the committed template
+terraform.tfvars
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Keys
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

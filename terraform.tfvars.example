@@ -1,0 +1,4 @@
+cluster_id = "<cluster-id>"
+key_name   = "<ec2-key-pair>"
+owner      = "<your-name>"
+aws_region = "us-east-2"
