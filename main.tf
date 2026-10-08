@@ -1,12 +1,14 @@
-# SSH bastion inside the VPC of a Redpanda BYOC cluster on AWS.
+# SSH bastion with rpk and kcat for reaching a Redpanda or Kafka cluster on AWS.
 #
-# Create:  terraform init && terraform apply -var cluster_id=<id> -var key_name=<key>
-# Remove:  terraform destroy -var cluster_id=<id> -var key_name=<key>
+# The bastion goes into a new VPC (create_vpc), an existing one (vpc_id), or
+# the VPC of a Redpanda BYOC cluster (redpanda_cluster_id), and can be peered
+# with the cluster's VPC (peer_vpc_id). See README.md for every option.
 #
-# See README.md for usage and troubleshooting.
+# Create:  terraform init && terraform apply
+# Remove:  terraform destroy (with the same variables)
 
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.9"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -24,23 +26,30 @@ provider "aws" {
 }
 
 locals {
-  bastion_name = "${var.owner}-bastion-${var.cluster_id}"
-  vpc_id       = coalesce(var.vpc_id, one(data.aws_instance.agent[*].vpc_id))
+  bastion_name = "${var.owner}-bastion${try("-${coalesce(var.redpanda_cluster_id, var.vpc_id)}", "")}"
   ssh_cidr     = coalesce(var.ssh_cidr, "${chomp(one(data.http.my_ip[*].response_body))}/32")
-  tags = {
-    Name             = local.bastion_name
-    redpanda-cluster = var.cluster_id
-  }
+  tags = merge(
+    { Name = local.bastion_name },
+    var.redpanda_cluster_id == null ? {} : { redpanda-cluster = var.redpanda_cluster_id },
+  )
+
+  # The BYOC agent lookup is needed to place the bastion in the cluster VPC,
+  # or to peer a new VPC with it when peer_vpc_id is unset.
+  lookup_agent = var.redpanda_cluster_id != null && var.vpc_id == null && (!var.create_vpc || var.peer_vpc_id == null)
+  agent_vpc_id = one(data.aws_instance.agent[*].vpc_id)
+
+  vpc_id            = coalesce(one(aws_vpc.bastion[*].id), var.vpc_id, local.agent_vpc_id)
+  public_subnet_ids = one(data.aws_subnets.public[*].ids)
+  subnet_id         = var.create_vpc ? one(aws_subnet.bastion[*].id) : try(sort(local.public_subnet_ids)[0], null)
 }
 
 # The BYOC agent instance is tagged Name=redpanda-<cluster_id>; its VPC is the
-# cluster VPC. Skipped when vpc_id is set (e.g. to destroy after the cluster
-# is gone).
+# cluster VPC.
 data "aws_instance" "agent" {
-  count = var.vpc_id == null ? 1 : 0
+  count = local.lookup_agent ? 1 : 0
   filter {
     name   = "tag:Name"
-    values = ["redpanda-${var.cluster_id}"]
+    values = ["redpanda-${var.redpanda_cluster_id}"]
   }
   filter {
     name   = "instance-state-name"
@@ -53,7 +62,9 @@ data "http" "my_ip" {
   url   = "https://checkip.amazonaws.com"
 }
 
+# Existing VPC: the bastion goes into its first public subnet.
 data "aws_subnets" "public" {
+  count = var.create_vpc ? 0 : 1
   filter {
     name   = "vpc-id"
     values = [local.vpc_id]
@@ -107,7 +118,7 @@ resource "aws_instance" "bastion" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
   key_name                    = var.key_name
-  subnet_id                   = sort(data.aws_subnets.public.ids)[0]
+  subnet_id                   = local.subnet_id
   vpc_security_group_ids      = [aws_security_group.bastion.id]
   associate_public_ip_address = true
   tags                        = local.tags
@@ -117,6 +128,9 @@ resource "aws_instance" "bastion" {
     rpk_url    = var.rpk_url
   })
   user_data_replace_on_change = true
+
+  # In a new VPC, cloud-init needs the internet route before boot.
+  depends_on = [aws_route.bastion_internet, aws_route_table_association.bastion]
 
   root_block_device {
     volume_type = "gp3"
@@ -129,8 +143,8 @@ resource "aws_instance" "bastion" {
 
   lifecycle {
     precondition {
-      condition     = length(data.aws_subnets.public.ids) > 0
-      error_message = "No public subnet (map-public-ip-on-launch=true) in ${local.vpc_id}."
+      condition     = local.subnet_id != null
+      error_message = "No public subnet (map-public-ip-on-launch=true) in ${local.vpc_id}. Use another vpc_id, or create_vpc = true."
     }
     # A newer AMI must not replace a running bastion.
     ignore_changes = [ami]

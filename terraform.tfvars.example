@@ -1,4 +1,18 @@
-cluster_id = "<cluster-id>"
+# Copy to terraform.tfvars and fill in. See README.md for every parameter.
+
 key_name   = "<ec2-key-pair>"
 owner      = "<your-name>"
 aws_region = "us-east-2"
+
+# --- Bastion VPC: pick one ---------------------------------------------------
+create_vpc = true
+vpc_cidr   = "10.255.0.0/24" # must not overlap the peer VPC
+# vpc_id              = "vpc-0123456789abcdef0" # existing VPC
+# redpanda_cluster_id = "<byoc-cluster-id>"     # BYOC cluster VPC (or, with create_vpc, peer with it)
+
+# --- Peering with the cluster VPC (optional) ---------------------------------
+# peer_vpc_id             = "vpc-0123456789abcdef0"
+# peer_security_group_ids = ["sg-0123456789abcdef0"]  # broker / node security groups to open
+# peer_ports              = [9092, 9644, 8081, 8082]
+# peer_private_zone_ids   = ["Z0123456789ABCDEFGHIJ"] # Route 53 private zone of the broker names
+# peer_route_table_ids    = ["rtb-0123456789abcdef0"] # default: all peer route tables
