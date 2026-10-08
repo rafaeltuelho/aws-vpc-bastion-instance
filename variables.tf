@@ -6,12 +6,17 @@ variable "key_name" {
 }
 
 variable "owner" {
-  description = "Prefix for resource names, e.g. your username."
+  description = "Prefix for resource names, e.g. your username. Letters, digits, '-' and '_' only."
   type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$", var.owner))
+    error_message = "owner must be 1-32 letters, digits, '-' or '_' (e.g. jdoe), not a placeholder like <your-name>."
+  }
 }
 
 variable "aws_region" {
-  description = "Region of the bastion (and of the peer VPC, if any)."
+  description = "Region of the bastion."
   type        = string
   default     = "us-east-2"
 }
@@ -24,17 +29,13 @@ variable "create_vpc" {
   default     = false
 
   validation {
-    condition     = var.create_vpc || var.vpc_id != null || var.redpanda_cluster_id != null
-    error_message = "Choose the bastion VPC: create_vpc = true, vpc_id = \"vpc-...\", or redpanda_cluster_id = \"...\" (BYOC cluster VPC)."
-  }
-  validation {
-    condition     = !(var.create_vpc && var.vpc_id != null)
-    error_message = "Set either create_vpc = true or vpc_id, not both."
+    condition     = length([for chosen in [var.create_vpc, var.vpc_id != null, var.redpanda_cluster_id != null] : chosen if chosen]) == 1
+    error_message = "Choose exactly one bastion VPC: create_vpc = true, vpc_id = \"vpc-...\", or redpanda_cluster_id = \"...\" (BYOC cluster VPC)."
   }
 }
 
 variable "vpc_cidr" {
-  description = "CIDR of the new VPC when create_vpc = true. Must not overlap the peer VPC."
+  description = "CIDR of the new VPC when create_vpc = true. If you plan to peer it with a cluster VPC, it must not overlap that VPC's CIDRs."
   type        = string
   default     = "10.255.0.0/24"
 
@@ -56,78 +57,9 @@ variable "vpc_id" {
 }
 
 variable "redpanda_cluster_id" {
-  description = "Redpanda BYOC cluster ID (Redpanda Cloud console). Alone: deploy into the cluster VPC. With create_vpc: peer the new VPC with the cluster VPC unless peer_vpc_id is set. Also used in names and tags."
+  description = "Redpanda BYOC cluster ID (Redpanda Cloud console). Deploys into the cluster VPC, found from the BYOC agent instance. Also used in names and tags."
   type        = string
   default     = null
-}
-
-# --- Peering (same account and region) ----------------------------------------
-
-variable "peer_vpc_id" {
-  description = "VPC to peer the bastion VPC with, typically the one hosting the Redpanda/Kafka cluster."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.peer_vpc_id == null || can(regex("^vpc-[0-9a-f]+$", var.peer_vpc_id))
-    error_message = "peer_vpc_id must look like vpc-0123456789abcdef0."
-  }
-  validation {
-    condition     = var.peer_vpc_id == null || var.peer_vpc_id != var.vpc_id
-    error_message = "peer_vpc_id must differ from vpc_id."
-  }
-}
-
-variable "peer_route_table_ids" {
-  description = "Peer VPC route tables that get a route back to the bastion subnet. Unset: all route tables of the peer VPC."
-  type        = list(string)
-  default     = null
-
-  validation {
-    condition     = var.peer_route_table_ids == null || alltrue([for id in(var.peer_route_table_ids == null ? [] : var.peer_route_table_ids) : can(regex("^rtb-[0-9a-f]+$", id))])
-    error_message = "peer_route_table_ids must be route table IDs like rtb-0123456789abcdef0."
-  }
-  validation {
-    condition     = var.peer_route_table_ids == null || var.peer_vpc_id != null || (var.create_vpc && var.redpanda_cluster_id != null)
-    error_message = "peer_route_table_ids needs peering: set peer_vpc_id (or create_vpc with redpanda_cluster_id)."
-  }
-}
-
-variable "peer_security_group_ids" {
-  description = "Broker security groups in the peer VPC to open to the bastion's private IP on peer_ports. Empty: none are changed."
-  type        = list(string)
-  default     = []
-
-  validation {
-    condition     = alltrue([for id in var.peer_security_group_ids : can(regex("^sg-[0-9a-f]+$", id))])
-    error_message = "peer_security_group_ids must be security group IDs like sg-0123456789abcdef0."
-  }
-  validation {
-    condition     = length(var.peer_security_group_ids) == 0 || var.peer_vpc_id != null || (var.create_vpc && var.redpanda_cluster_id != null)
-    error_message = "peer_security_group_ids needs peering: set peer_vpc_id (or create_vpc with redpanda_cluster_id)."
-  }
-}
-
-variable "peer_ports" {
-  description = "TCP ports opened in peer_security_group_ids. Default: Kafka API, Redpanda Admin API, Schema Registry, HTTP Proxy."
-  type        = list(number)
-  default     = [9092, 9644, 8081, 8082]
-
-  validation {
-    condition     = length(var.peer_ports) > 0 && alltrue([for p in var.peer_ports : p >= 1 && p <= 65535 && floor(p) == p])
-    error_message = "peer_ports must be a non-empty list of TCP ports (1-65535)."
-  }
-}
-
-variable "peer_private_zone_ids" {
-  description = "Route 53 private hosted zone IDs (same account) to associate with the bastion VPC, so their records (e.g. broker names) resolve there."
-  type        = list(string)
-  default     = []
-
-  validation {
-    condition     = alltrue([for id in var.peer_private_zone_ids : can(regex("^Z[A-Z0-9]+$", id))])
-    error_message = "peer_private_zone_ids must be hosted zone IDs like Z0123456789ABCDEFGHIJ (without the /hostedzone/ prefix)."
-  }
 }
 
 # --- Bastion instance ---------------------------------------------------------

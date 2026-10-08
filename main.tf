@@ -1,8 +1,9 @@
 # SSH bastion with rpk and kcat for reaching a Redpanda or Kafka cluster on AWS.
 #
 # The bastion goes into a new VPC (create_vpc), an existing one (vpc_id), or
-# the VPC of a Redpanda BYOC cluster (redpanda_cluster_id), and can be peered
-# with the cluster's VPC (peer_vpc_id). See README.md for every option.
+# the VPC of a Redpanda BYOC cluster (redpanda_cluster_id). Connecting it to a
+# cluster in another VPC is the job of the separate peering/ root module.
+# See README.md for every option.
 #
 # Create:  terraform init && terraform apply
 # Remove:  terraform destroy (with the same variables)
@@ -33,12 +34,7 @@ locals {
     var.redpanda_cluster_id == null ? {} : { redpanda-cluster = var.redpanda_cluster_id },
   )
 
-  # The BYOC agent lookup is needed to place the bastion in the cluster VPC,
-  # or to peer a new VPC with it when peer_vpc_id is unset.
-  lookup_agent = var.redpanda_cluster_id != null && var.vpc_id == null && (!var.create_vpc || var.peer_vpc_id == null)
-  agent_vpc_id = one(data.aws_instance.agent[*].vpc_id)
-
-  vpc_id            = coalesce(one(aws_vpc.bastion[*].id), var.vpc_id, local.agent_vpc_id)
+  vpc_id            = coalesce(one(aws_vpc.bastion[*].id), var.vpc_id, one(data.aws_instance.agent[*].vpc_id))
   public_subnet_ids = one(data.aws_subnets.public[*].ids)
   subnet_id         = var.create_vpc ? one(aws_subnet.bastion[*].id) : try(sort(local.public_subnet_ids)[0], null)
 }
@@ -46,7 +42,7 @@ locals {
 # The BYOC agent instance is tagged Name=redpanda-<cluster_id>; its VPC is the
 # cluster VPC.
 data "aws_instance" "agent" {
-  count = local.lookup_agent ? 1 : 0
+  count = var.redpanda_cluster_id != null ? 1 : 0
   filter {
     name   = "tag:Name"
     values = ["redpanda-${var.redpanda_cluster_id}"]
@@ -73,6 +69,11 @@ data "aws_subnets" "public" {
     name   = "map-public-ip-on-launch"
     values = ["true"]
   }
+}
+
+# Fails at plan time if key_name doesn't exist in aws_region.
+data "aws_key_pair" "bastion" {
+  key_name = var.key_name
 }
 
 # Canonical's Ubuntu images; the newest match wins.
@@ -117,7 +118,7 @@ resource "aws_security_group" "bastion" {
 resource "aws_instance" "bastion" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
-  key_name                    = var.key_name
+  key_name                    = data.aws_key_pair.bastion.key_name
   subnet_id                   = local.subnet_id
   vpc_security_group_ids      = [aws_security_group.bastion.id]
   associate_public_ip_address = true

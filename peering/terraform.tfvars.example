@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and fill in. See README.md for every parameter.
+
+aws_region     = "us-east-2"
+client_vpc_id  = "vpc-0123456789abcdef0" # e.g. `terraform output -raw vpc_id` in the bastion module
+cluster_vpc_id = "vpc-0fedcba9876543210" # VPC hosting the Redpanda/Kafka cluster
+
+# Narrow what the cluster side routes to and allows (default: whole client VPC)
+# client_cidrs = ["10.255.0.0/24"]
+
+# Everything below changes resources in, or attached to, the cluster VPC.
+# Use them only for resources no other tool manages inline; see README.md.
+
+# Preferred: prefix lists referenced by the cluster's security group rules
+# cluster_prefix_list_ids = ["pl-0123456789abcdef0"]
+
+# Alternative: rules added directly to the cluster's security groups
+# cluster_security_group_ids = ["sg-0123456789abcdef0"]
+# cluster_ports              = [9092, 9644, 8081, 8082]
+
+# Route 53 private zone(s) with the broker names
+# private_zone_ids = ["Z0123456789ABCDEFGHIJ"]
+
+# Default: all route tables in each VPC
+# client_route_table_ids  = ["rtb-0123456789abcdef0"]
+# cluster_route_table_ids = ["rtb-0fedcba9876543210"]

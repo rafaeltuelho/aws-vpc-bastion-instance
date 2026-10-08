@@ -4,7 +4,7 @@ output "public_ip" {
 }
 
 output "private_ip" {
-  description = "Bastion private IP (the source address brokers see over peering)."
+  description = "Bastion private IP (the source address brokers see)."
   value       = aws_instance.bastion.private_ip
 }
 
@@ -19,21 +19,11 @@ output "instance_id" {
 }
 
 output "vpc_id" {
-  description = "Bastion VPC ID."
+  description = "Bastion VPC ID. Pass it to the peering/ module as client_vpc_id."
   value       = local.vpc_id
 }
 
 output "subnet_id" {
   description = "Bastion subnet ID."
   value       = local.subnet_id
-}
-
-output "peer_vpc_id" {
-  description = "Peered VPC ID, or null. Pass as -var peer_vpc_id=... to destroy after a BYOC cluster is gone."
-  value       = local.peering ? local.peer_vpc_id : null
-}
-
-output "peering_connection_id" {
-  description = "VPC peering connection ID, or null."
-  value       = one(aws_vpc_peering_connection.bastion[*].id)
 }
