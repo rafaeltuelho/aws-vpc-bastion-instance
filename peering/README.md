@@ -271,6 +271,9 @@ Some failures are left to AWS to report at apply time:
 | `cluster_vpc_cidrs` | Cluster VPC CIDRs routed from the client side |
 | `client_route_table_ids` | Client VPC route tables that got routes |
 | `cluster_route_table_ids` | Cluster VPC route tables that got routes |
+| `prefix_list_entries` | Entries added to the cluster's prefix lists, as prefix list ID => CIDRs |
+| `security_group_rule_ids` | Inbound rules added to the cluster's security groups, as `sg\|port\|cidr` => rule ID |
+| `private_zone_associations` | Private hosted zones associated with the client VPC, as zone ID => zone name |
 
 ## Troubleshooting
 

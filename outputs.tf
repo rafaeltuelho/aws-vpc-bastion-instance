@@ -23,6 +23,11 @@ output "vpc_id" {
   value       = local.vpc_id
 }
 
+output "vpc_cidr" {
+  description = "Bastion VPC primary CIDR block."
+  value       = local.vpc_cidr
+}
+
 output "subnet_id" {
   description = "Bastion subnet ID."
   value       = local.subnet_id

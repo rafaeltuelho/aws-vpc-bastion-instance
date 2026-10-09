@@ -37,6 +37,7 @@ locals {
   vpc_id            = coalesce(one(aws_vpc.bastion[*].id), var.vpc_id, one(data.aws_instance.agent[*].vpc_id))
   public_subnet_ids = one(data.aws_subnets.public[*].ids)
   subnet_id         = var.create_vpc ? one(aws_subnet.bastion[*].id) : try(sort(local.public_subnet_ids)[0], null)
+  vpc_cidr          = var.create_vpc ? var.vpc_cidr : one(data.aws_vpc.existing[*].cidr_block)
 }
 
 # The BYOC agent instance is tagged Name=redpanda-<cluster_id>; its VPC is the
@@ -69,6 +70,11 @@ data "aws_subnets" "public" {
     name   = "map-public-ip-on-launch"
     values = ["true"]
   }
+}
+
+data "aws_vpc" "existing" {
+  count = var.create_vpc ? 0 : 1
+  id    = local.vpc_id
 }
 
 # Fails at plan time if key_name doesn't exist in aws_region.

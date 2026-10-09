@@ -213,6 +213,7 @@ These are checked during `terraform plan`, before anything is created.
 | `ssh_command` | Ready-to-edit SSH command |
 | `instance_id` | Bastion instance ID |
 | `vpc_id` | Bastion VPC ID; pass it to the peering module as `client_vpc_id` |
+| `vpc_cidr` | Bastion VPC primary CIDR block |
 | `subnet_id` | Bastion subnet ID |
 
 ### Troubleshooting
