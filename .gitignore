@@ -20,6 +20,9 @@ terraform.tfvars
 *.pem
 *.key
 
+# Created by rpk cloud commands
+.redpanda-agent/
+
 # OS / editor
 .DS_Store
 .idea/
