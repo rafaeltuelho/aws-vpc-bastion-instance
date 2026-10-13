@@ -9,6 +9,8 @@ cluster_vpc_id = "vpc-0fedcba9876543210" # VPC hosting the Redpanda/Kafka cluste
 
 # Everything below changes resources in, or attached to, the cluster VPC.
 # Use them only for resources no other tool manages inline; see README.md.
+# Redpanda BYOC: leave the prefix list, security group, port and zone settings
+# unset, and set cluster_route_table_ids to the purpose=private route tables.
 
 # Preferred: prefix lists referenced by the cluster's security group rules
 # cluster_prefix_list_ids = ["pl-0123456789abcdef0"]

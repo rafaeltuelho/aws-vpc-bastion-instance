@@ -21,7 +21,7 @@ variable "aws_region" {
   default     = "us-east-2"
 }
 
-# --- Bastion VPC: set exactly one of create_vpc, vpc_id or redpanda_cluster_id
+# --- Bastion VPC: set exactly one of create_vpc or vpc_id; never the cluster's
 
 variable "create_vpc" {
   description = "Create a new VPC (vpc_cidr) with one public subnet for the bastion."
@@ -29,8 +29,8 @@ variable "create_vpc" {
   default     = false
 
   validation {
-    condition     = length([for chosen in [var.create_vpc, var.vpc_id != null, var.redpanda_cluster_id != null] : chosen if chosen]) == 1
-    error_message = "Choose exactly one bastion VPC: create_vpc = true, vpc_id = \"vpc-...\", or redpanda_cluster_id = \"...\" (BYOC cluster VPC)."
+    condition     = var.create_vpc != (var.vpc_id != null)
+    error_message = "Choose exactly one bastion VPC: create_vpc = true, or vpc_id = \"vpc-...\" (an existing client VPC, not the cluster's)."
   }
 }
 
@@ -46,7 +46,7 @@ variable "vpc_cidr" {
 }
 
 variable "vpc_id" {
-  description = "Existing VPC to deploy into. Needs a public subnet. No Redpanda cluster is needed."
+  description = "Existing client VPC to deploy into, separate from the cluster's VPC. Needs a public subnet."
   type        = string
   default     = null
 
@@ -54,12 +54,6 @@ variable "vpc_id" {
     condition     = var.vpc_id == null || can(regex("^vpc-[0-9a-f]+$", var.vpc_id))
     error_message = "vpc_id must look like vpc-0123456789abcdef0."
   }
-}
-
-variable "redpanda_cluster_id" {
-  description = "Redpanda BYOC cluster ID (Redpanda Cloud console). Deploys into the cluster VPC, found from the BYOC agent instance. Also used in names and tags."
-  type        = string
-  default     = null
 }
 
 # --- Bastion instance ---------------------------------------------------------

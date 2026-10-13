@@ -23,6 +23,7 @@ and optionally:
 ## Contents
 
 - [What it changes outside the client VPC](#what-it-changes-outside-the-client-vpc)
+- [VPC peering or PrivateLink for Redpanda BYOC](#vpc-peering-or-privatelink-for-redpanda-byoc)
 - [Prerequisites](#prerequisites)
 - [Usage](#usage)
 - [Parameters](#parameters)
@@ -50,6 +51,47 @@ and optionally:
 
 Every one of these is removed by `terraform destroy`. Existing routes, rules,
 entries or associations are never modified.
+
+## VPC peering or PrivateLink for Redpanda BYOC
+
+This module only sets up VPC peering. For a private Redpanda BYOC cluster on
+AWS, Redpanda also supports
+[AWS PrivateLink](https://docs.redpanda.com/cloud-data-platform/networking/configure-privatelink-in-cloud-ui/)
+and [Transit Gateway](https://docs.redpanda.com/cloud-data-platform/networking/byoc/aws/transit-gateway/).
+Neither is covered here; this section is only for choosing between them.
+
+| | VPC peering (this module) | AWS PrivateLink |
+|---|---|---|
+| Direction | Both ways at the network level: either side can open connections, limited only by security groups. Redpanda recommends rejecting traffic initiated from the Redpanda network. | One way: only clients open connections, through an interface endpoint in their VPC. Redpanda can't reach your VPC. |
+| CIDRs | Must not overlap the cluster VPC, or any other VPC peered with it | Can overlap |
+| Scale | One peering connection per client VPC, each with routes on both sides. AWS allows 50 active peering connections per VPC by default, adjustable up to 125, which caps the number of peered VPCs, not TCP connections. | One endpoint per client VPC, with no peering quota. Client connections are limited only by your Redpanda usage tier. |
+| Changes on the Redpanda side | Peering accepted, routes back to the clients in the Redpanda VPC's private route tables | None in its route tables. You enable the endpoint service in the Redpanda Cloud UI or API, with an allowlist of AWS principal ARNs that may connect. |
+| Region | Same region | Same region, or [cross-region PrivateLink](https://docs.redpanda.com/cloud-data-platform/networking/configure-privatelink-in-cloud-ui/#cross-region-privatelink) |
+| Client ports | Bootstrap 9092, brokers 30092, Schema Registry 30081, HTTP Proxy 30082, Console 443 | Bootstrap 30292, brokers 32000–32500, Schema Registry 30081, HTTP Proxy 30282 and 35000–35500, Console 443. The endpoint's security group must allow them from the clients. |
+| DNS | No extra setup in Redpanda's peering guide | Cluster names resolve to the endpoint's private IPs, reachable only from the endpoint's VPC. Other VPCs and on-premises networks need Route 53 Resolver inbound and outbound endpoints and forwarding rules. |
+| Client settings | None | `connections.max.idle.ms` below 350000 (350 s) |
+| AWS cost | No charge for the peering itself; data crossing availability zones is billed | Hourly charge per endpoint per availability zone, plus a per-GB data processing charge |
+
+**Choose PrivateLink** when:
+
+- client VPC CIDRs overlap the cluster's, or you can't coordinate address
+  ranges with the clients' owners
+- many client VPCs or AWS accounts need access, and maintaining a peering and
+  routes for each isn't practical
+- security policy allows only client-initiated connections, with no network
+  path from the Redpanda VPC into yours
+- you don't want to change route tables in the Redpanda VPC
+- clients run in another region
+
+**Choose VPC peering** (this module) when:
+
+- one or a few client VPCs in the same account and region, with
+  non-overlapping CIDRs, need access, e.g. a test bastion like this repository's
+- you want the simplest setup, with no endpoints, extra ports or DNS
+  forwarding, and no hourly endpoint charges
+
+**Consider Transit Gateway** when many VPCs or on-premises networks already
+connect through a hub. Like peering, it needs non-overlapping CIDRs.
 
 ## Prerequisites
 
@@ -113,6 +155,11 @@ terraform destroy
 
 ### Firewall (optional)
 
+> [!NOTE]
+> **Not applicable to Redpanda BYOC clusters.** Leave `cluster_prefix_list_ids`,
+> `cluster_security_group_ids` and `cluster_ports` unset. See
+> [Redpanda BYOC clusters](#redpanda-byoc-clusters).
+
 Peering only opens a network path. The brokers' security groups must also
 accept the client CIDRs on the listener ports. Choose **one** of these, or
 leave both empty and allow the clients in the cluster project yourself.
@@ -125,6 +172,10 @@ leave both empty and allow the clients in the cluster project yourself.
 
 ### DNS (optional)
 
+> [!NOTE]
+> **Not applicable to Redpanda BYOC clusters.** Leave `private_zone_ids` unset.
+> See [Redpanda BYOC clusters](#redpanda-byoc-clusters).
+
 | Name | Type | Default | Description |
 |---|---|---|---|
 | `private_zone_ids` | list(string) | `[]` | Route 53 **private** hosted zones (same account) to associate with the client VPC, so their records resolve there. Use it when broker names like `redpanda-0.redpanda.internal` live in a private zone, e.g. one managed by external-dns. Give the bare ID (`Z0...`), without `/hostedzone/`. ⚠️ Changes the zones. If the project that owns a zone lists its VPCs inline (`vpc {}` blocks in `aws_route53_zone`), its next apply removes this association. |
@@ -133,6 +184,40 @@ Remote VPC DNS resolution needs no parameter. It's turned on automatically when
 both VPCs have DNS support and DNS hostnames enabled, so EC2 private hostnames
 of instances in the other VPC resolve to private IPs. The
 `remote_dns_resolution` output shows whether it was enabled.
+
+### Redpanda BYOC clusters
+
+> [!IMPORTANT]
+> With a private Redpanda BYOC cluster, set only the VPCs and routes.
+> `cluster_prefix_list_ids`, `cluster_security_group_ids`, `cluster_ports` and
+> `private_zone_ids` don't apply. Leave them unset.
+
+| Parameter | Why it doesn't apply to BYOC |
+|---|---|
+| `cluster_security_group_ids`, `cluster_ports` | The cluster's security groups already accept the private ranges `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `100.64.0.0/10` on the client ports. The Redpanda agent manages these groups and can revoke rules it didn't create, and Redpanda doesn't support customer changes to data plane resources. |
+| `cluster_prefix_list_ids` | BYOC security groups don't reference any customer-managed prefix list. |
+| `private_zone_ids` | BYOC DNS zones (`<cluster-id>.byoc.prd.cloud.redpanda.com`) are **public** Route 53 zones whose records hold private IPs. They resolve from any VPC with no association, and the module rejects public zones anyway. |
+
+The client VPC's CIDRs must fall in one of those private ranges, and must not
+overlap the BYOC VPC's CIDR. The BYOC VPC is tagged
+`Name=network-<network-id>`. Route only its private route tables (tag
+`purpose=private`), as Redpanda's
+[peering guide](https://docs.redpanda.com/cloud-data-platform/networking/byoc/aws/vpc-peering-aws/)
+does. Left unset, `cluster_route_table_ids` also adds routes to the public
+main route table.
+
+```bash
+aws ec2 describe-route-tables \
+  --filters "Name=tag:Name,Values=network-<network-id>" "Name=tag:purpose,Values=private" \
+  --query 'RouteTables[].RouteTableId'
+```
+
+```hcl
+client_vpc_id           = "vpc-0123456789abcdef0" # bastion VPC
+cluster_vpc_id          = "vpc-0fedcba9876543210" # BYOC VPC, Name=network-<network-id>
+client_cidrs            = ["10.255.0.0/24"]       # optional: only the bastion subnet
+cluster_route_table_ids = ["rtb-0123456789abcdef0", "rtb-0fedcba9876543210"] # purpose=private only
+```
 
 ## Working with a cluster managed by another project
 

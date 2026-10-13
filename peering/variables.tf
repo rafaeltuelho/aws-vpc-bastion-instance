@@ -67,7 +67,7 @@ variable "client_route_table_ids" {
 }
 
 variable "cluster_route_table_ids" {
-  description = "Cluster VPC route tables that get routes back to client_cidrs. Unset: all route tables of the cluster VPC. CHANGES THE CLUSTER VPC either way; set it only to narrow the change."
+  description = "Cluster VPC route tables that get routes back to client_cidrs. Unset: all route tables of the cluster VPC. CHANGES THE CLUSTER VPC either way; set it only to narrow the change. For Redpanda BYOC, set it to the route tables tagged purpose=private."
   type        = list(string)
   default     = null
 
@@ -80,7 +80,7 @@ variable "cluster_route_table_ids" {
 # --- Optional: access through the cluster's firewall --------------------------
 
 variable "cluster_prefix_list_ids" {
-  description = "Customer-managed prefix lists that the cluster's security groups reference. client_cidrs are added as entries. Preferred over cluster_security_group_ids: the cluster project keeps owning its rules. CHANGES THE PREFIX LISTS."
+  description = "Customer-managed prefix lists that the cluster's security groups reference. client_cidrs are added as entries. Preferred over cluster_security_group_ids: the cluster project keeps owning its rules. CHANGES THE PREFIX LISTS. Not applicable to Redpanda BYOC clusters."
   type        = list(string)
   default     = []
 
@@ -91,7 +91,7 @@ variable "cluster_prefix_list_ids" {
 }
 
 variable "cluster_security_group_ids" {
-  description = "Cluster security groups (brokers or Kubernetes nodes) that get inbound rules from client_cidrs on cluster_ports. CHANGES THE CLUSTER VPC. Conflicts with a project that defines these groups' rules inline."
+  description = "Cluster security groups (brokers or Kubernetes nodes) that get inbound rules from client_cidrs on cluster_ports. CHANGES THE CLUSTER VPC. Conflicts with a project that defines these groups' rules inline. Not applicable to Redpanda BYOC clusters."
   type        = list(string)
   default     = []
 
@@ -102,7 +102,7 @@ variable "cluster_security_group_ids" {
 }
 
 variable "cluster_ports" {
-  description = "TCP ports opened in cluster_security_group_ids. Default: Kafka API, Redpanda Admin API, Schema Registry, HTTP Proxy. Use the NodePorts for a Kubernetes deployment."
+  description = "TCP ports opened in cluster_security_group_ids. Default: Kafka API, Redpanda Admin API, Schema Registry, HTTP Proxy. Use the NodePorts for a Kubernetes deployment. Not applicable to Redpanda BYOC clusters."
   type        = list(number)
   default     = [9092, 9644, 8081, 8082]
 
@@ -115,7 +115,7 @@ variable "cluster_ports" {
 # --- Optional: DNS --------------------------------------------------------------
 
 variable "private_zone_ids" {
-  description = "Route 53 private hosted zones (same account) to associate with the client VPC, so their records (e.g. broker names) resolve there. CHANGES THE ZONES. Conflicts with a project that defines the zone's VPCs inline."
+  description = "Route 53 private hosted zones (same account) to associate with the client VPC, so their records (e.g. broker names) resolve there. CHANGES THE ZONES. Conflicts with a project that defines the zone's VPCs inline. Not applicable to Redpanda BYOC clusters (their zones are public)."
   type        = list(string)
   default     = []
 

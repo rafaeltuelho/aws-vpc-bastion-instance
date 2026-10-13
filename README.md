@@ -1,25 +1,32 @@
 # AWS VPC Bastion for Redpanda and Kafka
 
 Terraform for a small SSH bastion (Ubuntu 24.04) on AWS for working with a
-Redpanda or Apache Kafka cluster from inside AWS networking. It comes with
+private Redpanda or Apache Kafka cluster, such as a private Redpanda BYOC
+cluster or a self-managed cluster on EKS. It comes with
 [`rpk`](https://docs.redpanda.com/current/reference/rpk/) and
 [`kcat`](https://github.com/edenhill/kcat) preinstalled.
+
+The bastion always runs in its own client VPC, never in the cluster's VPC, and
+reaches the brokers through VPC peering. That mirrors a typical client network
+and leaves the cluster VPC to its owner; Redpanda, for one, doesn't support
+customer changes to a BYOC cluster's data plane resources.
 
 The repository has two independent Terraform root modules, each with its own
 state:
 
 | Module | Directory | What it does |
 |---|---|---|
-| **Bastion** | `.` (repository root) | Launches the bastion in a new VPC, an existing VPC, or a Redpanda BYOC cluster VPC. It never changes anything outside its own resources. |
-| **Peering** | [`peering/`](peering/README.md) | Optional connectivity layer: VPC peering between a client VPC (e.g. the bastion's) and a cluster VPC, routes in both directions, and optionally firewall and private DNS access. |
+| **Bastion** | `.` (repository root) | Launches the bastion in a new VPC or an existing client VPC, separate from the cluster's. It never changes anything outside its own resources. |
+| **Peering** | [`peering/`](peering/README.md) | Connectivity layer: VPC peering between a client VPC (e.g. the bastion's) and a cluster VPC, routes in both directions, and optionally firewall and private DNS access. |
 
 ## Contents
 
-- [Choosing a layout](#choosing-a-layout)
+- [How it fits together](#how-it-fits-together)
 - [Why peering is a separate module](#why-peering-is-a-separate-module)
 - [Bastion module](#bastion-module)
   - [Prerequisites](#prerequisites)
   - [Usage](#usage)
+  - [Connect to a Redpanda BYOC cluster](#connect-to-a-redpanda-byoc-cluster)
   - [Parameters](#parameters)
   - [What gets created](#what-gets-created)
   - [Validations](#validations)
@@ -28,13 +35,21 @@ state:
 - [Order of operations](#order-of-operations)
 - [Security notes](#security-notes)
 
-## Choosing a layout
+## How it fits together
 
-| Your situation | What to deploy |
-|---|---|
-| The cluster VPC has a public subnet, and the cluster already allows its own VPC | **Bastion only**, with `vpc_id` set to the cluster VPC (or `redpanda_cluster_id` for Redpanda BYOC). No peering, no changes to the cluster's network. This is the simplest option. |
-| The cluster is reachable over the internet | **Bastion only**, anywhere (e.g. `create_vpc = true`). |
-| You want the bastion in its own VPC, e.g. to mimic a customer's client network | **Bastion** with `create_vpc = true`, then the **[peering module](peering/README.md)** between the bastion VPC and the cluster VPC. |
+```
+ bastion VPC (create_vpc or vpc_id)          cluster VPC (private cluster)
+ ┌──────────────────────────────┐  peering   ┌──────────────────────────────┐
+ │ bastion: rpk, kcat           │◄──────────►│ brokers                      │
+ └──────────────────────────────┘            └──────────────────────────────┘
+   bastion module (repo root)     peering/       cluster's own project
+```
+
+1. Deploy the **bastion** with `create_vpc = true`, or into an existing client
+   VPC with `vpc_id`. Its CIDR must not overlap the cluster VPC's.
+2. Connect it with the **[peering module](peering/README.md)**.
+
+Same AWS account and region as the cluster.
 
 ## Why peering is a separate module
 
@@ -81,8 +96,9 @@ peering module knows both VPC IDs, as plain inputs.
     --public-key-material fileb://<(ssh-keygen -y -f ~/.ssh/my-key.pem)
   ```
 
-- With an existing VPC (`vpc_id` or `redpanda_cluster_id`): at least one public
-  subnet (`map-public-ip-on-launch=true`) with a route to an internet gateway
+- With an existing VPC (`vpc_id`): a client VPC, not the cluster's, with at
+  least one public subnet (`map-public-ip-on-launch=true`) routed to an
+  internet gateway
 
 ### Usage
 
@@ -99,12 +115,11 @@ Or pass parameters on the command line:
 # New VPC
 terraform apply -var create_vpc=true -var key_name=<key> -var owner=<you>
 
-# Existing VPC, e.g. the cluster's
+# Existing client VPC (not the cluster's)
 terraform apply -var vpc_id=vpc-0123456789abcdef0 -var key_name=<key> -var owner=<you>
-
-# Redpanda BYOC cluster VPC
-terraform apply -var redpanda_cluster_id=<id> -var key_name=<key> -var owner=<you>
 ```
+
+Then connect it to the cluster with the [peering module](peering/README.md).
 
 #### Connect
 
@@ -116,14 +131,12 @@ Cloud-init needs a minute or two after boot. Check progress with
 `tail -f /var/log/cloud-init-output.log`, or wait with
 `cloud-init status --wait`.
 
-Then, from the bastion:
+Then, once the [peering module](peering/README.md) is applied, connect from
+the bastion. For a Redpanda BYOC cluster, follow
+[Connect to a Redpanda BYOC cluster](#connect-to-a-redpanda-byoc-cluster).
+For self-managed Redpanda or Kafka:
 
 ```bash
-# Redpanda Cloud (BYOC)
-rpk cloud login
-rpk cloud cluster select
-
-# Self-managed Redpanda or Kafka
 rpk cluster info -X brokers=<broker>:<port>
 kcat -b <broker>:<port> -L
 ```
@@ -143,11 +156,140 @@ rpk profile create my-cluster \
 terraform destroy   # with the same variables used for apply
 ```
 
-If the bastion VPC is peered, destroy the peering module first; see
-[Order of operations](#order-of-operations). If a Redpanda BYOC cluster is
-already gone, its VPC lookup fails. Pass the VPC ID printed by
-`terraform output vpc_id` instead:
-`terraform destroy -var vpc_id=vpc-...`.
+Destroy the peering module first; see [Order of operations](#order-of-operations).
+
+### Connect to a Redpanda BYOC cluster
+
+This needs a BYOC cluster with private networking, the bastion, and the
+[peering module](peering/README.md#redpanda-byoc-clusters) applied with the
+cluster's `purpose=private` route tables. Run every step on the bastion.
+
+The endpoints are on the cluster's overview page in Redpanda Cloud, under
+**How to connect**:
+
+| Endpoint | Port | Used for |
+|---|---|---|
+| `seed-<hash>.<cluster-id>.byoc.prd.cloud.redpanda.com` | 9092 | Kafka bootstrap. Clients then connect to each broker on 30092. |
+| `api-<hash>.<cluster-id>.byoc.prd.cloud.redpanda.com` | 443 | Data Plane API (users, ACLs, topics, connectors) and Redpanda Console |
+| `schema-registry-<hash>.<cluster-id>.byoc.prd.cloud.redpanda.com` | 30081 | Schema Registry |
+| `pandaproxy-<hash>.<cluster-id>.byoc.prd.cloud.redpanda.com` | 30082 | HTTP Proxy |
+
+The Admin API (9644) isn't exposed in Redpanda Cloud, so commands that need
+it, such as `rpk cluster config`, `rpk cluster health` and `rpk redpanda`,
+don't work. Change cluster properties in the Cloud UI or with the Control
+Plane API instead.
+
+#### 1. Check the network path
+
+```bash
+SEED=seed-<hash>.<cluster-id>.byoc.prd.cloud.redpanda.com
+API=https://api-<hash>.<cluster-id>.byoc.prd.cloud.redpanda.com
+
+dig +short "$SEED"         # private IPs in the cluster VPC
+nc -zv "$SEED" 9092
+nc -zv "${API#https://}" 443
+```
+
+If these time out, see the
+[peering module's troubleshooting](peering/README.md#troubleshooting).
+
+#### 2. Log in to Redpanda Cloud
+
+The bastion has no browser, so `rpk` prints a sign-in URL. Open it on your
+own machine:
+
+```bash
+rpk cloud login --no-browser --no-profile
+```
+
+For automation, use a service account instead (Organization IAM in the Cloud
+UI). `--save` stores the credentials in `rpk.yaml` so `rpk` can refresh the
+token:
+
+```bash
+rpk cloud login --client-id <client-id> --client-secret <client-secret> --save --no-profile
+```
+
+#### 3. Create an rpk profile for the cluster
+
+```bash
+rpk cloud cluster select <cluster-name> --profile <cluster-name>
+```
+
+This fills in the brokers and enables TLS. BYOC certificates are publicly
+trusted, so you don't need `tls.ca`.
+
+#### 4. Create the first SASL user and its ACLs
+
+Kafka commands need a SASL user with ACLs, so the first user has to be
+created outside the Kafka API. Use either option.
+
+**Redpanda Console**: in the cluster's **Security** page, create a user under
+**Users**, then open it and add ACLs (**Allow all operations** for a lab only).
+With API gateway access set to Private, the Console loads only from inside
+the peered network: tunnel your browser through the bastion, e.g.
+`sshuttle -r ubuntu@<bastion-ip> <cluster-vpc-cidr>` or `ssh -D 1080` with a
+SOCKS5 proxy, or switch API gateway access to Public in the cluster's
+Dataplane settings.
+
+**Data Plane API**, from the bastion, with the token saved by `rpk cloud login`:
+
+```bash
+TOKEN=$(awk '/auth_token:/ {print $2; exit}' ~/.config/rpk/rpk.yaml)
+RP_USER=admin
+read -rsp 'Password: ' RP_PASS; echo
+
+dp() {  # dp <path>: POST JSON from stdin to the Data Plane API
+  curl -fsS -X POST "$API$1" -H "Authorization: Bearer $TOKEN" \
+    -H 'content-type: application/json' -d @-
+}
+
+jq -n --arg u "$RP_USER" --arg p "$RP_PASS" \
+  '{name: $u, password: $p, mechanism: "SASL_MECHANISM_SCRAM_SHA_256"}' | dp /v1/users
+
+# Full access on topics, consumer groups and the cluster (narrow it for production)
+for r in TOPIC:'*' GROUP:'*' CLUSTER:kafka-cluster; do
+  jq -n --arg u "User:$RP_USER" --arg t "RESOURCE_TYPE_${r%%:*}" --arg n "${r#*:}" \
+    '{principal: $u, host: "*", resource_type: $t, resource_name: $n,
+      resource_pattern_type: "RESOURCE_PATTERN_TYPE_LITERAL",
+      operation: "OPERATION_ALL", permission_type: "PERMISSION_TYPE_ALLOW"}' | dp /v1/acls
+done
+```
+
+#### 5. Add the credentials to the profile and test
+
+```bash
+rpk profile set user="$RP_USER" pass="$RP_PASS" sasl.mechanism=SCRAM-SHA-256
+
+rpk cluster info
+rpk topic create test
+echo hello | rpk topic produce test
+rpk topic consume test -n 1
+```
+
+`rpk` stores the password in plain text in `~/.config/rpk/rpk.yaml`.
+
+With kcat:
+
+```bash
+kcat -b "$SEED:9092" -X security.protocol=SASL_SSL \
+  -X sasl.mechanisms=SCRAM-SHA-256 -X sasl.username="$RP_USER" -X sasl.password="$RP_PASS" \
+  -X ssl.ca.location=/etc/ssl/certs/ca-certificates.crt -L
+```
+
+#### 6. More users and ACLs
+
+With the admin user in the profile, manage the rest with `rpk`:
+
+```bash
+rpk security user create app1 -p '<password>' --mechanism SCRAM-SHA-256
+rpk security acl create --allow-principal User:app1 \
+  --operation read,describe --topic 'logs-' --resource-pattern-type prefixed
+rpk security acl create --allow-principal User:app1 --operation read --group app1
+```
+
+If `rpk security user create` fails on your `rpk` version, create the user
+with the Data Plane API call from step 4.
 
 ### Parameters
 
@@ -156,7 +298,7 @@ already gone, its VPC lookup fails. Pass the VPC ID printed by
 | Name | Type | Default | Description |
 |---|---|---|---|
 | `key_name` | string | — | Name of an existing EC2 key pair in `aws_region`. You log in with its private key. |
-| `owner` | string | — | Prefix for resource names, e.g. your username. Letters, digits, `-` and `_` only (1–32 characters). Resources are named `<owner>-bastion[-<redpanda_cluster_id or vpc_id>]`. |
+| `owner` | string | — | Prefix for resource names, e.g. your username. Letters, digits, `-` and `_` only (1–32 characters). Resources are named `<owner>-bastion[-<vpc_id>]`. |
 | `aws_region` | string | `us-east-2` | Region of the bastion. |
 
 #### Bastion VPC: set exactly one
@@ -165,8 +307,7 @@ already gone, its VPC lookup fails. Pass the VPC ID printed by
 |---|---|---|---|
 | `create_vpc` | bool | `false` | Create a new VPC for the bastion: one public subnet spanning `vpc_cidr`, an internet gateway and a route table, with DNS support and hostnames enabled. The availability zone is chosen automatically among those that offer `instance_type`. |
 | `vpc_cidr` | string | `10.255.0.0/24` | CIDR of the new VPC (only with `create_vpc`). Between `/16` and `/28`. If you plan to peer it with a cluster VPC, pick a range that overlaps none of that VPC's CIDR blocks, including secondary ones. |
-| `vpc_id` | string | `null` | Existing VPC to deploy into, with or without a cluster in it. The bastion goes into its first public subnet (sorted by ID). |
-| `redpanda_cluster_id` | string | `null` | Redpanda BYOC cluster ID, from the Redpanda Cloud console. The bastion goes into the cluster VPC, found from the BYOC agent instance (tag `Name=redpanda-<id>`). Also used in resource names and in a `redpanda-cluster` tag. |
+| `vpc_id` | string | `null` | Existing client VPC to deploy into. Never the cluster's VPC: a Redpanda BYOC VPC (tag `redpanda-managed=true` or `Name=network-<id>`) is rejected. The bastion goes into its first public subnet (sorted by ID). |
 
 #### Bastion instance
 
@@ -186,8 +327,7 @@ already gone, its VPC lookup fails. Pass the VPC ID printed by
 | EC2 instance `<name>` | always | Latest Ubuntu 24.04 x86_64, public IP, IMDSv2 required, encrypted gp3 root volume. Cloud-init installs `rpk` (with bash completion), `kcat`, `curl`, `jq`, `unzip`, `netcat-openbsd`. |
 | VPC, public subnet, internet gateway, route table | `create_vpc` | DNS support and hostnames enabled |
 
-All resources are tagged `Name=<name>`, plus `redpanda-cluster=<id>` when
-`redpanda_cluster_id` is set.
+All resources are tagged `Name=<name>`.
 
 ### Validations
 
@@ -195,11 +335,12 @@ These are checked during `terraform plan`, before anything is created.
 
 | Check | Error when |
 |---|---|
-| Bastion VPC source | Not exactly one of `create_vpc`, `vpc_id`, `redpanda_cluster_id` is set |
+| Bastion VPC source | Not exactly one of `create_vpc`, `vpc_id` is set |
 | `owner` | Empty, longer than 32 characters, or contains characters other than letters, digits, `-`, `_` (e.g. a leftover `<your-name>` placeholder) |
 | Key pair | `key_name` doesn't exist in `aws_region` |
 | `vpc_cidr` | Not a valid IPv4 CIDR, or outside `/16`–`/28` |
 | `vpc_id` format | Not `vpc-…` |
+| Not a BYOC VPC | `vpc_id` is a Redpanda BYOC cluster VPC (tag `redpanda-managed=true` or `Name=network-<20-character id>`) |
 | `ssh_cidr` | Not a valid CIDR |
 | Public subnet | An existing VPC has no subnet with auto-assign public IP |
 | Instance type | No availability zone in the region offers `instance_type` (new VPC) |
@@ -220,14 +361,12 @@ These are checked during `terraform plan`, before anything is created.
 
 - **`no matching EC2 Key Pair found`**: `key_name` doesn't exist in
   `aws_region` (key pairs are per region).
-- **`no matching EC2 Instance found` (`data.aws_instance.agent`)**: wrong
-  `redpanda_cluster_id`, `aws_region` or AWS account/profile, or the BYOC
-  cluster is gone. Pass `vpc_id` instead.
 - **`No public subnet ...`**: the existing VPC has no subnet with auto-assign
-  public IP. Use `create_vpc = true` (and the peering module), or another VPC.
+  public IP. Use `create_vpc = true`, or another VPC.
 - **`Value for undeclared variable`** warnings: your `terraform.tfvars` still
-  has settings from an older version, e.g. `peer_vpc_id`. Remove them; peering
-  now lives in `peering/`.
+  has settings from an older version, e.g. `peer_vpc_id` or
+  `redpanda_cluster_id`. Remove them; peering now lives in `peering/`, and the
+  bastion no longer deploys into a cluster VPC.
 - **SSH times out**: your public IP changed since `apply` (VPN, new network).
   Run `terraform apply` again to refresh the rule, or set `ssh_cidr`.
 - **`rpk: command not found`**: cloud-init is still running or failed. Check

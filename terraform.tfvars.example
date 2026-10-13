@@ -1,5 +1,5 @@
 # Copy to terraform.tfvars and fill in. See README.md for every parameter.
-# To connect the bastion to a cluster in another VPC, see peering/.
+# The bastion always gets its own VPC; connect it to the cluster with peering/.
 
 key_name   = "<ec2-key-pair>"
 owner      = "<your-name>" # letters, digits, '-' and '_' only
@@ -7,6 +7,5 @@ aws_region = "us-east-2"
 
 # --- Bastion VPC: set exactly one -------------------------------------------
 create_vpc = true
-vpc_cidr   = "10.255.0.0/24" # if you'll peer it, must not overlap the cluster VPC
-# vpc_id              = "vpc-0123456789abcdef0" # existing VPC, e.g. the cluster's
-# redpanda_cluster_id = "<byoc-cluster-id>"     # Redpanda BYOC cluster VPC
+vpc_cidr   = "10.255.0.0/24" # must not overlap the cluster VPC
+# vpc_id   = "vpc-0123456789abcdef0" # existing client VPC, never the cluster's

@@ -7,10 +7,11 @@ Guidance for AI coding agents working in this repository.
 Two independent Terraform root modules, each with its own state:
 
 - **Bastion** (repository root): an SSH bastion, with `rpk` and `kcat`
-  installed by cloud-init, for reaching a Redpanda or Kafka cluster on AWS. It
-  goes into a new VPC (`create_vpc`), an existing VPC (`vpc_id`), or a Redpanda
-  BYOC cluster VPC (`redpanda_cluster_id`). It must never change anything
-  outside its own resources.
+  installed by cloud-init, for reaching a private Redpanda or Kafka cluster on
+  AWS through VPC peering. It goes into its own client VPC, new (`create_vpc`)
+  or existing (`vpc_id`), never the cluster's VPC: Redpanda doesn't support
+  customer changes to BYOC data plane resources, and a BYOC VPC is rejected.
+  It must never change anything outside its own resources.
 - **Peering** (`peering/`): the connectivity layer between a client VPC (e.g.
   the bastion's) and a cluster VPC: peering, routes both ways, and optional
   prefix list entries, security group rules and Route 53 zone associations on
@@ -23,15 +24,16 @@ modules.
 
 ## Layout
 
-- `main.tf`: providers, locals, BYOC agent lookup, subnet/AMI/IP/key pair
-  lookups, bastion security group and instance
+- `main.tf`: providers, locals, subnet/VPC/AMI/IP/key pair lookups (with the
+  BYOC VPC guard), bastion security group and instance
 - `vpc.tf`: optional new VPC (`create_vpc`)
 - `variables.tf`, `outputs.tf`, `user-data.sh` (cloud-init, rendered with
   `templatefile()`), `terraform.tfvars.example`
 - `peering/main.tf`: peering, routes, CIDR checks, prefix list entries,
   security group rules, zone associations
 - `peering/variables.tf`, `peering/outputs.tf`, `peering/terraform.tfvars.example`
-- `README.md`: overview, layout choice, bastion docs, order of operations;
+- `README.md`: overview, how the modules fit, bastion docs, connecting `rpk`
+  to a BYOC cluster, order of operations;
   `peering/README.md`: peering docs, including how to hand cluster-side
   resources over from another project
 

@@ -1,9 +1,8 @@
 # SSH bastion with rpk and kcat for reaching a Redpanda or Kafka cluster on AWS.
 #
-# The bastion goes into a new VPC (create_vpc), an existing one (vpc_id), or
-# the VPC of a Redpanda BYOC cluster (redpanda_cluster_id). Connecting it to a
-# cluster in another VPC is the job of the separate peering/ root module.
-# See README.md for every option.
+# The bastion goes into its own client VPC, new (create_vpc) or existing
+# (vpc_id), never the cluster's VPC. Connecting it to a private cluster is the
+# job of the separate peering/ root module. See README.md for every option.
 #
 # Create:  terraform init && terraform apply
 # Remove:  terraform destroy (with the same variables)
@@ -27,31 +26,14 @@ provider "aws" {
 }
 
 locals {
-  bastion_name = "${var.owner}-bastion${try("-${coalesce(var.redpanda_cluster_id, var.vpc_id)}", "")}"
+  bastion_name = "${var.owner}-bastion${var.vpc_id == null ? "" : "-${var.vpc_id}"}"
   ssh_cidr     = coalesce(var.ssh_cidr, "${chomp(one(data.http.my_ip[*].response_body))}/32")
-  tags = merge(
-    { Name = local.bastion_name },
-    var.redpanda_cluster_id == null ? {} : { redpanda-cluster = var.redpanda_cluster_id },
-  )
+  tags         = { Name = local.bastion_name }
 
-  vpc_id            = coalesce(one(aws_vpc.bastion[*].id), var.vpc_id, one(data.aws_instance.agent[*].vpc_id))
+  vpc_id            = var.create_vpc ? one(aws_vpc.bastion[*].id) : var.vpc_id
   public_subnet_ids = one(data.aws_subnets.public[*].ids)
   subnet_id         = var.create_vpc ? one(aws_subnet.bastion[*].id) : try(sort(local.public_subnet_ids)[0], null)
   vpc_cidr          = var.create_vpc ? var.vpc_cidr : one(data.aws_vpc.existing[*].cidr_block)
-}
-
-# The BYOC agent instance is tagged Name=redpanda-<cluster_id>; its VPC is the
-# cluster VPC.
-data "aws_instance" "agent" {
-  count = var.redpanda_cluster_id != null ? 1 : 0
-  filter {
-    name   = "tag:Name"
-    values = ["redpanda-${var.redpanda_cluster_id}"]
-  }
-  filter {
-    name   = "instance-state-name"
-    values = ["running", "stopped"]
-  }
 }
 
 data "http" "my_ip" {
@@ -75,6 +57,19 @@ data "aws_subnets" "public" {
 data "aws_vpc" "existing" {
   count = var.create_vpc ? 0 : 1
   id    = local.vpc_id
+
+  lifecycle {
+    # Redpanda BYOC VPCs are tagged redpanda-managed=true and
+    # Name=network-<network-id>. Redpanda doesn't support customer changes to
+    # them.
+    postcondition {
+      condition = !(
+        lookup(self.tags, "redpanda-managed", "") == "true" ||
+        can(regex("^network-[0-9a-v]{20}$", lookup(self.tags, "Name", "")))
+      )
+      error_message = "${self.id} (Name=${lookup(self.tags, "Name", "")}) is a Redpanda BYOC cluster VPC. Redpanda doesn't support deploying into it: use create_vpc = true and connect with peering/."
+    }
+  }
 }
 
 # Fails at plan time if key_name doesn't exist in aws_region.
